@@ -1,4 +1,4 @@
-task.wait(5) -- Aguarda 3 segundos antes de iniciar o KURZ HUB
+task.wait(5) -- Aguarda antes de iniciar o KURZ HUB
 
 --[[
     KURZ HUB
@@ -25,11 +25,13 @@ local fileName = "KurzHubConfig.json"
 
 local config = {
     speedBoost = false,
-    speedValue = 50,
+    speedValue = 28,
     espBox = false,
     keybindSpeedEnabled = true,
     speedKey = "F"
 }
+
+local MAX_SPEED_LIMIT = 60
 
 local function saveConfig()
     if writefile then
@@ -56,7 +58,15 @@ end
 
 loadConfig()
 
+if type(config.speedValue) ~= "number" or config.speedValue < 16 then
+    config.speedValue = 16
+elseif config.speedValue > MAX_SPEED_LIMIT then
+    config.speedValue = MAX_SPEED_LIMIT
+end
+
 local menuOpen = false
+local hudHiddenByAlt = false
+local mainWasOpenBeforeAlt = false
 local currentTab = "MAIN"
 local listeningForKey = nil
 local espBoxFolder = nil
@@ -64,69 +74,60 @@ local espBoxConnections = {}
 local speedQuickButton = nil
 
 -------------------------------------------------
--- SPEED BOOST (estável + sem deslize)
+-- SPEED BOOST (Linear Velocity sem mexer em WalkSpeed)
 -------------------------------------------------
+local function getCharacterParts()
+    local char = LocalPlayer.Character
+    if not char then return nil, nil, nil end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp or humanoid.Health <= 0 then
+        return char, nil, nil
+    end
+    return char, humanoid, hrp
+end
+
 local function setSpeedBoost(state)
     config.speedBoost = state
     saveConfig()
+
     if speedQuickButton then
         speedQuickButton.BackgroundColor3 = state
             and Color3.fromRGB(35, 150, 70)
             or Color3.fromRGB(10, 10, 10)
     end
 
-    local char = LocalPlayer.Character
-    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        if state then
-            humanoid.WalkSpeed = config.speedValue
-        else
-            humanoid.WalkSpeed = 16
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local v = hrp.AssemblyLinearVelocity
-                hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-            end
+    if not state then
+        local _, _, hrp = getCharacterParts()
+        if hrp then
+            local v = hrp.AssemblyLinearVelocity
+            hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
         end
     end
 end
 
-RunService.RenderStepped:Connect(function()
+RunService.Heartbeat:Connect(function(dt)
     if not config.speedBoost then return end
 
-    local char = LocalPlayer.Character
-    if not char then return end
-
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not humanoid or not hrp or humanoid.Health <= 0 then return end
-
-    if humanoid.WalkSpeed ~= config.speedValue then
-        humanoid.WalkSpeed = config.speedValue
-    end
+    local _, humanoid, hrp = getCharacterParts()
+    if not humanoid or not hrp then return end
 
     local moveDir = humanoid.MoveDirection
-    local vel = hrp.AssemblyLinearVelocity
-    local yVel = vel.Y
+    if moveDir.Magnitude < 0.05 then return end
 
-    if moveDir.Magnitude > 0.05 then
-        local targetX = moveDir.X * config.speedValue
-        local targetZ = moveDir.Z * config.speedValue
-        local smooth = 0.55
-        local newX = vel.X + (targetX - vel.X) * smooth
-        local newZ = vel.Z + (targetZ - vel.Z) * smooth
-        hrp.AssemblyLinearVelocity = Vector3.new(newX, yVel, newZ)
-    else
-        hrp.AssemblyLinearVelocity = Vector3.new(0, yVel, 0)
-    end
-end)
+    local flatDir = Vector3.new(moveDir.X, 0, moveDir.Z)
+    if flatDir.Magnitude <= 0.001 then return end
+    flatDir = flatDir.Unit
 
-LocalPlayer.CharacterAdded:Connect(function(char)
-    task.wait(0.25)
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        humanoid.WalkSpeed = config.speedBoost and config.speedValue or 16
-    end
+    local desiredSpeed = math.clamp(config.speedValue, 16, MAX_SPEED_LIMIT)
+    local targetVel = flatDir * desiredSpeed
+    local currentVel = hrp.AssemblyLinearVelocity
+
+    local alpha = math.clamp(dt * 14, 0.15, 0.6)
+    local nextX = currentVel.X + (targetVel.X - currentVel.X) * alpha
+    local nextZ = currentVel.Z + (targetVel.Z - currentVel.Z) * alpha
+
+    hrp.AssemblyLinearVelocity = Vector3.new(nextX, currentVel.Y, nextZ)
 end)
 
 -------------------------------------------------
@@ -167,11 +168,11 @@ local function createESPBoxForPlayer(player)
         local box = Instance.new("BoxHandleAdornment")
         box.Name = player.Name
         box.Adornee = torso
-        box.Size = Vector3.new(2.2, 2.2, 1.2) -- tamanho do torso
-        box.Color3 = Color3.fromRGB(255, 0, 0) -- vermelho forte
+        box.Size = Vector3.new(2.2, 2.2, 1.2)
+        box.Color3 = Color3.fromRGB(255, 0, 0)
         box.AlwaysOnTop = true
         box.ZIndex = 10
-        box.Transparency = 0 -- sem transparência
+        box.Transparency = 0
         box.Parent = espBoxFolder
     end
 
@@ -242,7 +243,6 @@ local toggleStroke = Instance.new("UIStroke", toggleBtn)
 toggleStroke.Color = Color3.fromRGB(255, 40, 40)
 toggleStroke.Thickness = 2
 
--- Botão rápido do Speed Boost (canto direito)
 speedQuickButton = Instance.new("TextButton")
 speedQuickButton.Name = "SpeedBoostQuickToggle"
 speedQuickButton.AnchorPoint = Vector2.new(1, 0.5)
@@ -470,9 +470,10 @@ local function createNumberBox(parent, labelText, defaultValue, onChanged)
 
     box.FocusLost:Connect(function()
         local num = tonumber(box.Text)
-        if num and num > 0 then
-            box.Text = tostring(math.floor(num))
-            if onChanged then onChanged(math.floor(num)) end
+        if num and num >= 16 then
+            local clamped = math.floor(math.clamp(num, 16, MAX_SPEED_LIMIT))
+            box.Text = tostring(clamped)
+            if onChanged then onChanged(clamped) end
         else
             box.Text = tostring(config.speedValue)
         end
@@ -594,7 +595,7 @@ local configPage = createPage("CONFIG")
 createSectionTitle(configPage, "KEYBINDS")
 createToggle(configPage, "Enable Speed Keybind", config.keybindSpeedEnabled, function(v)
     config.keybindSpeedEnabled = v
-    if speedQuickButton then
+    if speedQuickButton and not hudHiddenByAlt then
         speedQuickButton.Visible = v
     end
     saveConfig()
@@ -611,9 +612,34 @@ sideButtons["MAIN"].button.TextColor3 = Color3.fromRGB(255, 255, 255)
 sideButtons["MAIN"].button.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 
 -------------------------------------------------
+-- ESCONDER / MOSTRAR COM ALT
+-------------------------------------------------
+local function toggleHudByAlt()
+    if not hudHiddenByAlt then
+        hudHiddenByAlt = true
+        mainWasOpenBeforeAlt = menuOpen
+        toggleBtn.Visible = false
+        if speedQuickButton then
+            speedQuickButton.Visible = false
+        end
+        main.Visible = false
+        menuOpen = false
+    else
+        hudHiddenByAlt = false
+        toggleBtn.Visible = true
+        if speedQuickButton then
+            speedQuickButton.Visible = config.keybindSpeedEnabled
+        end
+        menuOpen = mainWasOpenBeforeAlt
+        main.Visible = menuOpen
+    end
+end
+
+-------------------------------------------------
 -- ABRIR / FECHAR
 -------------------------------------------------
 toggleBtn.MouseButton1Click:Connect(function()
+    if hudHiddenByAlt then return end
     menuOpen = not menuOpen
     main.Visible = menuOpen
 end)
@@ -622,10 +648,16 @@ end)
 -- KEYBINDS
 -------------------------------------------------
 UserInputService.InputBegan:Connect(function(input, processed)
-    if processed then return end
     if UserInputService:GetFocusedTextBox() then return end
 
     if input.UserInputType == Enum.UserInputType.Keyboard then
+        if input.KeyCode == Enum.KeyCode.LeftAlt or input.KeyCode == Enum.KeyCode.RightAlt then
+            toggleHudByAlt()
+            return
+        end
+
+        if processed then return end
+
         local keyName = input.KeyCode.Name
 
         if listeningForKey == "speed" then
