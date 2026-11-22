@@ -1,4 +1,4 @@
-task.wait(3) -- Aguarda 3 segundos antes de iniciar o KURZ HUB
+task.wait(5) -- Aguarda 3 segundos antes de iniciar o KURZ HUB
 
 --[[
     KURZ HUB
