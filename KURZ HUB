@@ -1,0 +1,659 @@
+--[[
+    KURZ HUB
+    Interface moderna preto e vermelho
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+
+if CoreGui:FindFirstChild("KurzHub") then
+    CoreGui.KurzHub:Destroy()
+end
+
+-------------------------------------------------
+-- CONFIGURAÇÕES / ESTADOS + SALVAMENTO
+-------------------------------------------------
+local fileName = "KurzHubConfig.json"
+
+local config = {
+    speedBoost = false,
+    speedValue = 50,
+    espBox = false,
+    keybindSpeedEnabled = true,
+    speedKey = "F"
+}
+
+local function saveConfig()
+    if writefile then
+        pcall(function()
+            writefile(fileName, HttpService:JSONEncode(config))
+        end)
+    end
+end
+
+local function loadConfig()
+    if readfile and isfile and isfile(fileName) then
+        pcall(function()
+            local data = HttpService:JSONDecode(readfile(fileName))
+            if type(data) == "table" then
+                for k, v in pairs(data) do
+                    if config[k] ~= nil then
+                        config[k] = v
+                    end
+                end
+            end
+        end)
+    end
+end
+
+loadConfig()
+
+local menuOpen = false
+local currentTab = "MAIN"
+local listeningForKey = nil
+local espBoxFolder = nil
+local espBoxConnections = {}
+local speedQuickButton = nil
+
+-------------------------------------------------
+-- SPEED BOOST (estável + sem deslize)
+-------------------------------------------------
+local function setSpeedBoost(state)
+    config.speedBoost = state
+    saveConfig()
+    if speedQuickButton then
+        speedQuickButton.BackgroundColor3 = state
+            and Color3.fromRGB(35, 150, 70)
+            or Color3.fromRGB(10, 10, 10)
+    end
+
+    local char = LocalPlayer.Character
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        if state then
+            humanoid.WalkSpeed = config.speedValue
+        else
+            humanoid.WalkSpeed = 16
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local v = hrp.AssemblyLinearVelocity
+                hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+            end
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    if not config.speedBoost then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp or humanoid.Health <= 0 then return end
+
+    if humanoid.WalkSpeed ~= config.speedValue then
+        humanoid.WalkSpeed = config.speedValue
+    end
+
+    local moveDir = humanoid.MoveDirection
+    local vel = hrp.AssemblyLinearVelocity
+    local yVel = vel.Y
+
+    if moveDir.Magnitude > 0.05 then
+        local targetX = moveDir.X * config.speedValue
+        local targetZ = moveDir.Z * config.speedValue
+        local smooth = 0.55
+        local newX = vel.X + (targetX - vel.X) * smooth
+        local newZ = vel.Z + (targetZ - vel.Z) * smooth
+        hrp.AssemblyLinearVelocity = Vector3.new(newX, yVel, newZ)
+    else
+        hrp.AssemblyLinearVelocity = Vector3.new(0, yVel, 0)
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.25)
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.WalkSpeed = config.speedBoost and config.speedValue or 16
+    end
+end)
+
+-------------------------------------------------
+-- ESP BOX (quadrado vermelho forte no torso)
+-------------------------------------------------
+local function getTorso(char)
+    return char:FindFirstChild("UpperTorso")
+        or char:FindFirstChild("Torso")
+        or char:FindFirstChild("HumanoidRootPart")
+end
+
+local function clearESPBox()
+    if espBoxFolder then
+        espBoxFolder:Destroy()
+        espBoxFolder = nil
+    end
+    for _, conn in pairs(espBoxConnections) do
+        if typeof(conn) == "RBXScriptConnection" then
+            conn:Disconnect()
+        end
+    end
+    table.clear(espBoxConnections)
+end
+
+local function createESPBoxForPlayer(player)
+    if player == LocalPlayer then return end
+    if not espBoxFolder then return end
+
+    local function setupCharacter(char)
+        if not char or not espBoxFolder then return end
+
+        local old = espBoxFolder:FindFirstChild(player.Name)
+        if old then old:Destroy() end
+
+        local torso = getTorso(char)
+        if not torso then return end
+
+        local box = Instance.new("BoxHandleAdornment")
+        box.Name = player.Name
+        box.Adornee = torso
+        box.Size = Vector3.new(2.2, 2.2, 1.2) -- tamanho do torso
+        box.Color3 = Color3.fromRGB(255, 0, 0) -- vermelho forte
+        box.AlwaysOnTop = true
+        box.ZIndex = 10
+        box.Transparency = 0 -- sem transparência
+        box.Parent = espBoxFolder
+    end
+
+    if player.Character then
+        setupCharacter(player.Character)
+    end
+
+    local conn = player.CharacterAdded:Connect(function(char)
+        task.wait(0.15)
+        setupCharacter(char)
+    end)
+    table.insert(espBoxConnections, conn)
+end
+
+local function setESPBox(state)
+    config.espBox = state
+    saveConfig()
+    clearESPBox()
+
+    if not state then return end
+
+    espBoxFolder = Instance.new("Folder")
+    espBoxFolder.Name = "KurzESPBox"
+    espBoxFolder.Parent = CoreGui
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        createESPBoxForPlayer(player)
+    end
+
+    local joinConn = Players.PlayerAdded:Connect(function(player)
+        createESPBoxForPlayer(player)
+    end)
+    table.insert(espBoxConnections, joinConn)
+
+    local leaveConn = Players.PlayerRemoving:Connect(function(player)
+        if espBoxFolder then
+            local b = espBoxFolder:FindFirstChild(player.Name)
+            if b then b:Destroy() end
+        end
+    end)
+    table.insert(espBoxConnections, leaveConn)
+end
+
+-------------------------------------------------
+-- INTERFACE
+-------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "KurzHub"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = CoreGui
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "ToggleButton"
+toggleBtn.Size = UDim2.new(0, 44, 0, 44)
+toggleBtn.Position = UDim2.new(0, 14, 0.42, 0)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Text = "K"
+toggleBtn.Font = Enum.Font.GothamBlack
+toggleBtn.TextSize = 22
+toggleBtn.TextColor3 = Color3.fromRGB(255, 40, 40)
+toggleBtn.AutoButtonColor = false
+toggleBtn.Parent = gui
+
+Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 8)
+local toggleStroke = Instance.new("UIStroke", toggleBtn)
+toggleStroke.Color = Color3.fromRGB(255, 40, 40)
+toggleStroke.Thickness = 2
+
+-- Botão rápido do Speed Boost (canto direito)
+speedQuickButton = Instance.new("TextButton")
+speedQuickButton.Name = "SpeedBoostQuickToggle"
+speedQuickButton.AnchorPoint = Vector2.new(1, 0.5)
+speedQuickButton.Size = UDim2.new(0, 124, 0, 34)
+speedQuickButton.Position = UDim2.new(1, -14, 0.5, 0)
+speedQuickButton.BackgroundColor3 = config.speedBoost
+    and Color3.fromRGB(35, 150, 70)
+    or Color3.fromRGB(10, 10, 10)
+speedQuickButton.BorderSizePixel = 0
+speedQuickButton.Text = "SPEED BOOST"
+speedQuickButton.Font = Enum.Font.GothamBold
+speedQuickButton.TextSize = 12
+speedQuickButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedQuickButton.AutoButtonColor = false
+speedQuickButton.Visible = config.keybindSpeedEnabled
+speedQuickButton.Parent = gui
+Instance.new("UICorner", speedQuickButton).CornerRadius = UDim.new(0, 7)
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 520, 0, 380)
+main.Position = UDim2.new(0.5, -260, 0.5, -190)
+main.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
+main.BorderSizePixel = 0
+main.Visible = false
+main.ClipsDescendants = true
+main.Parent = gui
+
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+local mainStroke = Instance.new("UIStroke", main)
+mainStroke.Color = Color3.fromRGB(255, 40, 40)
+mainStroke.Thickness = 2
+
+local header = Instance.new("Frame")
+header.Name = "Header"
+header.Size = UDim2.new(1, 0, 0, 48)
+header.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+header.BorderSizePixel = 0
+header.Parent = main
+
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 10)
+
+local headerFix = Instance.new("Frame")
+headerFix.Size = UDim2.new(1, 0, 0, 12)
+headerFix.Position = UDim2.new(0, 0, 1, -12)
+headerFix.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+headerFix.BorderSizePixel = 0
+headerFix.Parent = header
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -20, 1, 0)
+title.Position = UDim2.new(0, 18, 0, 0)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBlack
+title.Text = "KURZ HUB"
+title.TextColor3 = Color3.fromRGB(255, 40, 40)
+title.TextSize = 20
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local sidebar = Instance.new("Frame")
+sidebar.Name = "Sidebar"
+sidebar.Size = UDim2.new(0, 110, 1, -48)
+sidebar.Position = UDim2.new(0, 0, 0, 48)
+sidebar.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+sidebar.BorderSizePixel = 0
+sidebar.Parent = main
+
+local sideLayout = Instance.new("UIListLayout")
+sideLayout.Padding = UDim.new(0, 6)
+sideLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+sideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+sideLayout.Parent = sidebar
+
+local sidePad = Instance.new("UIPadding")
+sidePad.PaddingTop = UDim.new(0, 14)
+sidePad.Parent = sidebar
+
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.Size = UDim2.new(1, -110, 1, -48)
+content.Position = UDim2.new(0, 110, 0, 48)
+content.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
+content.BorderSizePixel = 0
+content.ClipsDescendants = true
+content.Parent = main
+
+-------------------------------------------------
+-- HELPERS DE UI
+-------------------------------------------------
+local pages = {}
+local sideButtons = {}
+
+local function createPage(name)
+    local page = Instance.new("ScrollingFrame")
+    page.Name = name
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 4
+    page.ScrollBarImageColor3 = Color3.fromRGB(255, 40, 40)
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.Visible = false
+    page.Parent = content
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 12)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = page
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 16)
+    pad.PaddingLeft = UDim.new(0, 18)
+    pad.PaddingRight = UDim.new(0, 14)
+    pad.Parent = page
+
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 30)
+    end)
+
+    pages[name] = page
+    return page
+end
+
+local function createSectionTitle(parent, text)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -10, 0, 24)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(255, 50, 50)
+    label.TextSize = 16
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = parent
+    return label
+end
+
+local function createToggle(parent, name, default, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -10, 0, 40)
+    row.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.new(1, -70, 1, 0)
+    nameLbl.Position = UDim2.new(0, 14, 0, 0)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Font = Enum.Font.GothamMedium
+    nameLbl.Text = name
+    nameLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+    nameLbl.TextSize = 14
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.Parent = row
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0, 42, 0, 22)
+    track.Position = UDim2.new(1, -54, 0.5, -11)
+    track.BackgroundColor3 = default and Color3.fromRGB(255, 40, 40) or Color3.fromRGB(45, 45, 45)
+    track.Parent = row
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 18, 0, 18)
+    knob.Position = default and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.Parent = track
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local state = default
+    local function setState(val)
+        state = val
+        local goalPos = val and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+        local goalColor = val and Color3.fromRGB(255, 40, 40) or Color3.fromRGB(45, 45, 45)
+        TweenService:Create(knob, TweenInfo.new(0.18), {Position = goalPos}):Play()
+        TweenService:Create(track, TweenInfo.new(0.18), {BackgroundColor3 = goalColor}):Play()
+        if callback then callback(val) end
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            setState(not state)
+        end
+    end)
+
+    return setState
+end
+
+local function createNumberBox(parent, labelText, defaultValue, onChanged)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -10, 0, 40)
+    row.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.new(0.55, 0, 1, 0)
+    nameLbl.Position = UDim2.new(0, 14, 0, 0)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Font = Enum.Font.GothamMedium
+    nameLbl.Text = labelText
+    nameLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+    nameLbl.TextSize = 14
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.Parent = row
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0, 80, 0, 26)
+    box.Position = UDim2.new(1, -94, 0.5, -13)
+    box.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    box.BorderSizePixel = 0
+    box.Font = Enum.Font.GothamBold
+    box.Text = tostring(defaultValue)
+    box.TextColor3 = Color3.fromRGB(255, 80, 80)
+    box.TextSize = 14
+    box.ClearTextOnFocus = false
+    box.Parent = row
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+    local boxStroke = Instance.new("UIStroke", box)
+    boxStroke.Color = Color3.fromRGB(255, 40, 40)
+    boxStroke.Thickness = 1
+
+    box.FocusLost:Connect(function()
+        local num = tonumber(box.Text)
+        if num and num > 0 then
+            box.Text = tostring(math.floor(num))
+            if onChanged then onChanged(math.floor(num)) end
+        else
+            box.Text = tostring(config.speedValue)
+        end
+    end)
+
+    return box
+end
+
+local function createKeybindBox(parent, labelText, defaultKey)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -10, 0, 40)
+    row.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.new(0.55, 0, 1, 0)
+    nameLbl.Position = UDim2.new(0, 14, 0, 0)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Font = Enum.Font.GothamMedium
+    nameLbl.Text = labelText
+    nameLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+    nameLbl.TextSize = 14
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.Parent = row
+
+    local keyBtn = Instance.new("TextButton")
+    keyBtn.Size = UDim2.new(0, 80, 0, 26)
+    keyBtn.Position = UDim2.new(1, -94, 0.5, -13)
+    keyBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    keyBtn.BorderSizePixel = 0
+    keyBtn.Font = Enum.Font.GothamBold
+    keyBtn.Text = defaultKey
+    keyBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+    keyBtn.TextSize = 14
+    keyBtn.AutoButtonColor = false
+    keyBtn.Parent = row
+    Instance.new("UICorner", keyBtn).CornerRadius = UDim.new(0, 6)
+
+    local keyStroke = Instance.new("UIStroke", keyBtn)
+    keyStroke.Color = Color3.fromRGB(255, 40, 40)
+    keyStroke.Thickness = 1
+
+    keyBtn.MouseButton1Click:Connect(function()
+        listeningForKey = "speed"
+        keyBtn.Text = "..."
+        keyBtn.TextColor3 = Color3.fromRGB(255, 200, 50)
+    end)
+
+    return keyBtn
+end
+
+local function createSideButton(text, tabName, order)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 90, 0, 38)
+    btn.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.TextColor3 = Color3.fromRGB(160, 160, 160)
+    btn.LayoutOrder = order
+    btn.AutoButtonColor = false
+    btn.Parent = sidebar
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local indicator = Instance.new("Frame")
+    indicator.Size = UDim2.new(0, 3, 0, 22)
+    indicator.Position = UDim2.new(0, 0, 0.5, -11)
+    indicator.BackgroundColor3 = Color3.fromRGB(255, 40, 40)
+    indicator.Visible = false
+    indicator.Parent = btn
+    Instance.new("UICorner", indicator).CornerRadius = UDim.new(0, 2)
+
+    btn.MouseButton1Click:Connect(function()
+        currentTab = tabName
+        for name, page in pairs(pages) do
+            page.Visible = (name == tabName)
+        end
+        for _, data in pairs(sideButtons) do
+            data.indicator.Visible = false
+            data.button.TextColor3 = Color3.fromRGB(160, 160, 160)
+            data.button.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
+        end
+        indicator.Visible = true
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+    end)
+
+    sideButtons[tabName] = {button = btn, indicator = indicator}
+    return btn
+end
+
+-------------------------------------------------
+-- ABAS
+-------------------------------------------------
+local mainPage = createPage("MAIN")
+createSectionTitle(mainPage, "MOVEMENT")
+local setSpeedToggle = createToggle(mainPage, "Speed Boost", config.speedBoost, function(v)
+    setSpeedBoost(v)
+end)
+speedQuickButton.MouseButton1Click:Connect(function()
+    setSpeedBoost(not config.speedBoost)
+    setSpeedToggle(config.speedBoost)
+end)
+createNumberBox(mainPage, "Speed Value", config.speedValue, function(val)
+    config.speedValue = val
+    saveConfig()
+end)
+
+local visualsPage = createPage("VISUALS")
+createSectionTitle(visualsPage, "ESP")
+createToggle(visualsPage, "ESP BOX", config.espBox, function(v)
+    setESPBox(v)
+end)
+
+local configPage = createPage("CONFIG")
+createSectionTitle(configPage, "KEYBINDS")
+createToggle(configPage, "Enable Speed Keybind", config.keybindSpeedEnabled, function(v)
+    config.keybindSpeedEnabled = v
+    if speedQuickButton then
+        speedQuickButton.Visible = v
+    end
+    saveConfig()
+end)
+local speedKeyBtn = createKeybindBox(configPage, "Speed Boost Key", config.speedKey)
+
+createSideButton("MAIN", "MAIN", 1)
+createSideButton("VISUALS", "VISUALS", 2)
+createSideButton("CONFIG", "CONFIG", 3)
+
+pages["MAIN"].Visible = true
+sideButtons["MAIN"].indicator.Visible = true
+sideButtons["MAIN"].button.TextColor3 = Color3.fromRGB(255, 255, 255)
+sideButtons["MAIN"].button.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+
+-------------------------------------------------
+-- ABRIR / FECHAR
+-------------------------------------------------
+toggleBtn.MouseButton1Click:Connect(function()
+    menuOpen = not menuOpen
+    main.Visible = menuOpen
+end)
+
+-------------------------------------------------
+-- KEYBINDS
+-------------------------------------------------
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if UserInputService:GetFocusedTextBox() then return end
+
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        local keyName = input.KeyCode.Name
+
+        if listeningForKey == "speed" then
+            config.speedKey = keyName
+            speedKeyBtn.Text = keyName
+            speedKeyBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+            listeningForKey = nil
+            saveConfig()
+            return
+        end
+
+        if config.keybindSpeedEnabled then
+            local success, keyEnum = pcall(function()
+                return Enum.KeyCode[config.speedKey]
+            end)
+            if success and input.KeyCode == keyEnum then
+                setSpeedBoost(not config.speedBoost)
+                if setSpeedToggle then
+                    setSpeedToggle(config.speedBoost)
+                end
+            end
+        end
+    end
+end)
+
+if config.espBox then
+    setESPBox(true)
+end
+if config.speedBoost then
+    setSpeedBoost(true)
+end
+
+print("[KURZ HUB] Carregado com sucesso!")
